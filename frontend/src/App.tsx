@@ -1,58 +1,47 @@
-import { useEffect, useState } from 'react'
-import { getHealth, getMeta, type Health, type Meta } from './api'
+import { Accuracy } from './tabs/Accuracy'
+import { DecisionDay } from './tabs/DecisionDay'
+import { Method } from './tabs/Method'
+import { useUrlState, type Tab } from './state'
 
-type Load<T> = { state: 'loading' } | { state: 'ok'; data: T } | { state: 'error'; message: string }
-
-function useLoad<T>(fn: () => Promise<T>): Load<T> {
-  const [result, setResult] = useState<Load<T>>({ state: 'loading' })
-  useEffect(() => {
-    fn()
-      .then((data) => setResult({ state: 'ok', data }))
-      .catch((err: Error) => setResult({ state: 'error', message: err.message }))
-  }, [fn])
-  return result
+const TAB_LABELS: Record<Tab, string> = {
+  day: 'Decision day',
+  accuracy: 'Forecast accuracy (January)',
+  method: 'Method & assumptions',
 }
 
 function App() {
-  const health = useLoad<Health>(getHealth)
-  const meta = useLoad<Meta>(getMeta)
+  const { state, update, notices, dismissNotices } = useUrlState()
 
   return (
-    <main>
-      <h1>UK wind forecast accuracy</h1>
+    <div className="app">
+      <header className="header">
+        <h1>WindGap</h1>
+        <p className="tagline">How far off was the day-ahead UK wind forecast when you had to commit?</p>
+        <p className="tz">All times UTC (same as UK time in January).</p>
+      </header>
 
-      <section>
-        <h2>API health</h2>
-        {health.state === 'loading' && <p>Loading…</p>}
-        {health.state === 'error' && <p className="error">{health.message}</p>}
-        {health.state === 'ok' && <p>Status: <strong>{health.data.status}</strong></p>}
-      </section>
+      {notices.length > 0 && (
+        <div className="notice" role="status">
+          <span>{notices.join('. ')}.</span>
+          <button type="button" className="notice-close" aria-label="Dismiss" onClick={dismissNotices}>×</button>
+        </div>
+      )}
 
-      <section>
-        <h2>Metadata</h2>
-        {meta.state === 'loading' && <p>Loading…</p>}
-        {meta.state === 'error' && <p className="error">{meta.message}</p>}
-        {meta.state === 'ok' && (
-          <dl>
-            <dt>Delivery days</dt>
-            <dd>{meta.data.delivery_start} to {meta.data.delivery_end}</dd>
-            <dt>Default cutoff</dt>
-            <dd>{meta.data.default_cutoff} UTC on the day before delivery</dd>
-            <dt>Publish times seen</dt>
-            <dd>{meta.data.publish_times_of_day.join(', ')}</dd>
-            <dt>Correction</dt>
-            <dd>
-              {meta.data.correction_methods.join(' / ')} (default:{' '}
-              {meta.data.default_correction_method}). {meta.data.correction_note}
-            </dd>
-            <dt>Data source</dt>
-            <dd>{meta.data.data_source}</dd>
-            <dt>Time zone</dt>
-            <dd>{meta.data.timezone}</dd>
-          </dl>
-        )}
-      </section>
-    </main>
+      <nav className="tabs" role="tablist">
+        {(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
+          <button key={t} type="button" role="tab" aria-selected={state.tab === t}
+            className={state.tab === t ? 'tab active' : 'tab'} onClick={() => update({ tab: t })}>
+            {TAB_LABELS[t]}
+          </button>
+        ))}
+      </nav>
+
+      <main>
+        {state.tab === 'day' && <DecisionDay state={state} update={update} />}
+        {state.tab === 'accuracy' && <Accuracy state={state} update={update} />}
+        {state.tab === 'method' && <Method />}
+      </main>
+    </div>
   )
 }
 

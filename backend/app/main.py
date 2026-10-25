@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import AfterValidator, BaseModel
 
 from app import config, metrics
 from app.correction import METHODS, InsufficientHistoryError, corrected_forecasts_for_range, \
@@ -39,6 +39,12 @@ CORRECTION_NOTE = ("Corrections are trained on delivery days D-8..D-2 only (deci
 CutoffParam = Annotated[str, Query(pattern=r"^([01]\d|2[0-3]):[0-5]\d$",
                                    description="Decision cutoff on D-1, HH:MM UTC")]
 Method = Literal["additive", "ratio"]
+
+# Response fields are rounded on construction: MW to 0.1, hours to 0.01.
+MW = Annotated[float, AfterValidator(lambda v: round(v, 1))]
+Hours = Annotated[float, AfterValidator(lambda v: round(v, 2))]
+# A publish time of day seen on fewer days than this is listed as irregular.
+REGULAR_PUBLISH_MIN_DAYS = 3
 
 
 # ---------------------------------------------------------------- data
@@ -85,11 +91,17 @@ class Health(BaseModel):
     status: str
 
 
+class IrregularPublish(BaseModel):
+    time: str
+    dates: list[date]
+
+
 class Meta(BaseModel):
     delivery_start: date
     delivery_end: date
     default_cutoff: str
     publish_times_of_day: list[str]
+    irregular_publishes: list[IrregularPublish]
     correction_methods: list[str]
     default_correction_method: str
     correction_note: str
@@ -99,21 +111,21 @@ class Meta(BaseModel):
 
 class Summary(BaseModel):
     n: int
-    mae: float
-    rmse: float
-    bias: float
-    p10: float
-    p50: float
-    p90: float
+    mae: MW
+    rmse: MW
+    bias: MW
+    p10: MW
+    p50: MW
+    p90: MW
 
 
 class DayRow(BaseModel):
     hour: int
     start_time: datetime
-    forecast_mw: float
-    corrected_forecast_mw: float
-    actual_mw: Optional[float]
-    error_mw: Optional[float]
+    forecast_mw: MW
+    corrected_forecast_mw: MW
+    actual_mw: Optional[MW]
+    error_mw: Optional[MW]
 
 
 class CorrectionUsed(BaseModel):
@@ -126,8 +138,8 @@ class CorrectionUsed(BaseModel):
 
 class PublishPoint(BaseModel):
     hour: int
-    forecast_mw: float
-    lead_hours: float
+    forecast_mw: MW
+    lead_hours: Hours
 
 
 class OtherPublish(BaseModel):
@@ -137,8 +149,10 @@ class OtherPublish(BaseModel):
 
 
 class DaySummary(BaseModel):
-    mae: Optional[float]
-    bias: Optional[float]
+    mae: Optional[MW]
+    bias: Optional[MW]
+    corrected_mae: Optional[MW]
+    corrected_bias: Optional[MW]
 
 
 class DayResponse(BaseModel):
@@ -155,21 +169,23 @@ class DayResponse(BaseModel):
 class HourStat(BaseModel):
     hour: int
     n: int
-    mae: float
-    bias: float
+    mae: MW
+    bias: MW
 
 
 class LeadStat(BaseModel):
     lead_bucket: str
     n: int
-    mae: float
-    bias: float
+    mae: MW
+    bias: MW
 
 
 class DailyStat(BaseModel):
     date: date
-    mae: float
-    bias: float
+    mae: MW
+    bias: MW
+    additive_mae: MW
+    ratio_mae: MW
 
 
 class CorrectedSummaries(BaseModel):
@@ -190,8 +206,8 @@ class AccuracyResponse(BaseModel):
 
 class TimeseriesPoint(BaseModel):
     start_time: datetime
-    forecast_mw: float
-    actual_mw: float
+    forecast_mw: MW
+    actual_mw: MW
 
 
 class TimeseriesResponse(BaseModel):
@@ -258,9 +274,15 @@ def health():
 
 @app.get("/api/meta", response_model=Meta)
 def meta():
-    times = get_dataset().forecasts["publish_time"].dt.strftime("%H:%M").unique()
+    pubs = get_dataset().forecasts["publish_time"].drop_duplicates()
+    by_time = (pd.DataFrame({"time": pubs.dt.strftime("%H:%M"), "day": pubs.dt.date})
+               .groupby("time")["day"].apply(sorted))
+    regular = [t for t, days in by_time.items() if len(days) >= REGULAR_PUBLISH_MIN_DAYS]
+    irregular = [IrregularPublish(time=t, dates=days) for t, days in by_time.items()
+                 if len(days) < REGULAR_PUBLISH_MIN_DAYS]
     return Meta(delivery_start=DELIVERY_START, delivery_end=DELIVERY_END,
-                default_cutoff=config.CUTOFF, publish_times_of_day=sorted(times),
+                default_cutoff=config.CUTOFF, publish_times_of_day=regular,
+                irregular_publishes=irregular,
                 correction_methods=list(METHODS),
                 default_correction_method=config.DEFAULT_CORRECTION_METHOD,
                 correction_note=CORRECTION_NOTE, data_source=DATA_SOURCE,
@@ -296,12 +318,18 @@ def day(date: date, cutoff: CutoffParam = config.CUTOFF, method: Optional[Method
     ]
 
     errors = joined["error"].dropna()
+    corrected_errors_day = (joined["corrected_mw"] - joined["actual_mw"]).dropna()
+    value = float(corrected["correction"].iloc[0])
     return DayResponse(
         date=date, cutoff=cutoff, decision_time=decided_at.to_pydatetime(),
         publish_time=publish.to_pydatetime(), rows=rows,
         summary=DaySummary(mae=optional_float(errors.abs().mean()),
-                           bias=optional_float(errors.mean())),
-        correction=CorrectionUsed(method=method, value=float(corrected["correction"].iloc[0]),
+                           bias=optional_float(errors.mean()),
+                           corrected_mae=optional_float(corrected_errors_day.abs().mean()),
+                           corrected_bias=optional_float(corrected_errors_day.mean())),
+        # An additive offset is MW (0.1 precision); a ratio factor needs more digits.
+        correction=CorrectionUsed(method=method,
+                                  value=round(value, 1 if method == "additive" else 4),
                                   unit="MW subtracted" if method == "additive" else "multiplier",
                                   window_start=window_start, window_end=window_end),
         other_publishes=other_publishes)
@@ -319,8 +347,11 @@ def accuracy(cutoff: CutoffParam = config.CUTOFF, start: Optional[date] = None,
 
     daily = (dec.assign(abs_error=dec["error"].abs())
              .groupby("delivery_date")
-             .agg(mae=("abs_error", "mean"), bias=("error", "mean"))
-             .reset_index())
+             .agg(mae=("abs_error", "mean"), bias=("error", "mean")))
+    for m in METHODS:
+        corr = in_range(corrected_errors(cutoff, m), start, end)
+        daily[f"{m}_mae"] = corr["error"].abs().groupby(corr["delivery_date"]).mean()
+    daily = daily.reset_index()
     return AccuracyResponse(
         cutoff=cutoff, start=start, end=end,
         summary=Summary(**metrics.summary(dec)),
@@ -330,7 +361,8 @@ def accuracy(cutoff: CutoffParam = config.CUTOFF, start: Optional[date] = None,
         by_hour_of_day=metrics.by_hour_of_day(dec).to_dict("records"),
         by_lead_bucket=metrics.by_lead_bucket(all_pubs).astype({"lead_bucket": str})
         .to_dict("records"),
-        daily=[DailyStat(date=r.delivery_date, mae=r.mae, bias=r.bias)
+        daily=[DailyStat(date=r.delivery_date, mae=r.mae, bias=r.bias,
+                         additive_mae=r.additive_mae, ratio_mae=r.ratio_mae)
                for r in daily.itertuples()])
 
 
