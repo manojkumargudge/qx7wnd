@@ -32,6 +32,19 @@ def summary(df: pd.DataFrame) -> dict:
     }
 
 
+def energy_gaps(df: pd.DataFrame) -> dict:
+    """Energy in MWh from hourly errors (each row is one hour, so MW x 1 h = MWh).
+
+    shortfall_mwh: forecast above actual, i.e. wind planned but not delivered.
+    surplus_mwh:   forecast below actual, i.e. extra wind; reported as a positive number.
+    """
+    e = df["error"]
+    return {
+        "shortfall_mwh": float(e.clip(lower=0).sum()),
+        "surplus_mwh": float(-e.clip(upper=0).sum()) + 0.0,  # + 0.0 turns -0.0 into 0.0
+    }
+
+
 def by_lead_bucket(df: pd.DataFrame) -> pd.DataFrame:
     """Bias and MAE per 6-hour lead bucket [0,6), [6,12), ... Pass all publishes."""
     edges = list(range(0, MAX_LEAD_HOURS + 1, LEAD_BUCKET_HOURS))

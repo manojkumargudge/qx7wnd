@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  biasSentence, formatHours, formatK, formatMW, formatPublish, formatSignedMW, leadRange, p10Sentence, p90Sentence,
+  biasSentence, formatGWh, formatHours, formatK, formatMW, formatPublish, formatSignedMW, leadRange, p10Sentence, p90Sentence,
 } from './format'
 
 describe('KPI formatting', () => {
@@ -10,6 +10,15 @@ describe('KPI formatting', () => {
     expect(formatMW(-549.3)).toBe('−549 MW')
     expect(formatMW(-0.4)).toBe('0 MW')
     expect(formatMW(null)).toBe('–')
+  })
+
+  it('formats energy in GWh with one decimal and thousands separators', () => {
+    expect(formatGWh(25004)).toBe('25.0 GWh')
+    expect(formatGWh(17263.7)).toBe('17.3 GWh')
+    expect(formatGWh(1408689.5)).toBe('1,408.7 GWh')
+    expect(formatGWh(0)).toBe('0.0 GWh')
+    expect(formatGWh(-0)).toBe('0.0 GWh')
+    expect(formatGWh(null)).toBe('–')
   })
 
   it('formats axis ticks in thousands without hiding half steps', () => {

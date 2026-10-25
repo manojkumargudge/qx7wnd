@@ -15,6 +15,7 @@ export interface UrlState {
   date: string
   cutoff: string
   adjusted: boolean
+  others: boolean
 }
 
 function isValidDate(s: string | null): s is string {
@@ -33,6 +34,7 @@ export function parseUrlState(search: string): UrlState {
     date: isValidDate(date) ? date : DEFAULT_DATE,
     cutoff: cutoff && CUTOFF_OPTIONS.includes(cutoff) ? cutoff : DEFAULT_CUTOFF,
     adjusted: q.get('adjusted') === '1',
+    others: q.get('others') === '1',
   }
 }
 
@@ -58,6 +60,7 @@ export function urlNotices(search: string): string[] {
 export function toSearch(s: UrlState): string {
   const q = new URLSearchParams({ tab: s.tab, date: s.date, cutoff: s.cutoff })
   if (s.adjusted) q.set('adjusted', '1')
+  if (s.others) q.set('others', '1')
   return `?${q}`
 }
 

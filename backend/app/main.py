@@ -153,6 +153,11 @@ class DaySummary(BaseModel):
     bias: Optional[MW]
     corrected_mae: Optional[MW]
     corrected_bias: Optional[MW]
+    # Energy gaps over the day's observed hours, MWh; both reported as positive numbers.
+    shortfall_mwh: MW
+    surplus_mwh: MW
+    corrected_shortfall_mwh: MW
+    corrected_surplus_mwh: MW
 
 
 class DayResponse(BaseModel):
@@ -193,12 +198,24 @@ class CorrectedSummaries(BaseModel):
     ratio: Summary
 
 
+class EnergyGap(BaseModel):
+    shortfall_mwh: MW
+    surplus_mwh: MW
+
+
+class EnergyGaps(BaseModel):
+    raw: EnergyGap
+    additive: EnergyGap
+    ratio: EnergyGap
+
+
 class AccuracyResponse(BaseModel):
     cutoff: str
     start: date
     end: date
     summary: Summary
     corrected: CorrectedSummaries
+    energy: EnergyGaps
     by_hour_of_day: list[HourStat]
     by_lead_bucket: list[LeadStat]
     daily: list[DailyStat]
@@ -326,7 +343,10 @@ def day(date: date, cutoff: CutoffParam = config.CUTOFF, method: Optional[Method
         summary=DaySummary(mae=optional_float(errors.abs().mean()),
                            bias=optional_float(errors.mean()),
                            corrected_mae=optional_float(corrected_errors_day.abs().mean()),
-                           corrected_bias=optional_float(corrected_errors_day.mean())),
+                           corrected_bias=optional_float(corrected_errors_day.mean()),
+                           **metrics.energy_gaps(pd.DataFrame({"error": errors})),
+                           **{f"corrected_{k}": v for k, v in metrics.energy_gaps(
+                               pd.DataFrame({"error": corrected_errors_day})).items()}),
         # An additive offset is MW (0.1 precision); a ratio factor needs more digits.
         correction=CorrectionUsed(method=method,
                                   value=round(value, 1 if method == "additive" else 4),
@@ -357,6 +377,9 @@ def accuracy(cutoff: CutoffParam = config.CUTOFF, start: Optional[date] = None,
         summary=Summary(**metrics.summary(dec)),
         corrected=CorrectedSummaries(**{
             m: Summary(**metrics.summary(in_range(corrected_errors(cutoff, m), start, end)))
+            for m in METHODS}),
+        energy=EnergyGaps(raw=EnergyGap(**metrics.energy_gaps(dec)), **{
+            m: EnergyGap(**metrics.energy_gaps(in_range(corrected_errors(cutoff, m), start, end)))
             for m in METHODS}),
         by_hour_of_day=metrics.by_hour_of_day(dec).to_dict("records"),
         by_lead_bucket=metrics.by_lead_bucket(all_pubs).astype({"lead_bucket": str})

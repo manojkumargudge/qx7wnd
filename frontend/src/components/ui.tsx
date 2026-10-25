@@ -68,18 +68,22 @@ export function ChartCard({ title, caption, children }: {
   )
 }
 
-export function LegendItem({ color, label, dashed, thick, faint }: {
+export function LegendItem({ color, label, dashed, thick, faint, swatch }: {
   color: string
   label: string
   dashed?: boolean
   thick?: boolean
   faint?: boolean
+  /** Draw a filled block (for shaded areas) instead of a line. */
+  swatch?: boolean
 }) {
   return (
     <span className="legend-item">
-      <svg width="28" height="10" aria-hidden="true">
-        <line x1="0" y1="5" x2="28" y2="5" stroke={color} strokeWidth={thick ? 3.5 : 2}
-          strokeDasharray={dashed ? '5 3' : undefined} strokeOpacity={faint ? 0.6 : 1} />
+      <svg width="28" height="12" aria-hidden="true">
+        {swatch
+          ? <rect x="0" y="1" width="28" height="10" rx="2" fill={color} />
+          : <line x1="0" y1="6" x2="28" y2="6" stroke={color} strokeWidth={thick ? 3.5 : 2}
+            strokeDasharray={dashed ? '5 3' : undefined} strokeOpacity={faint ? 0.6 : 1} />}
       </svg>
       {label}
     </span>

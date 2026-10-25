@@ -1,5 +1,5 @@
 import {
-  Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip,
+  Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip,
   XAxis, YAxis,
 } from 'recharts'
 import type { TooltipProps } from 'recharts'
@@ -7,11 +7,15 @@ import { api, type DayResponse } from '../api'
 import { COLORS } from '../colors'
 import { ChartCard, CutoffSelect, KpiCard, LegendItem, Loadable } from '../components/ui'
 import {
-  biasSentence, formatHour, formatHours, formatK, formatLongDay, formatMW, formatPublish, formatSignedMW, leadRange,
+  biasSentence, formatGWh, formatHour, formatHours, formatK, formatLongDay, formatMW, formatPublish, formatSignedMW,
+  leadRange,
 } from '../format'
+import { buildGapSeries } from '../gapShading'
 import { DELIVERY_END, DELIVERY_START, shiftDate, useFetch, type UrlState } from '../state'
 
-type ChartRow = Record<string, number | null>
+type ChartRow = Record<string, number | [number, number] | boolean | null>
+
+const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21]
 
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1)
 
@@ -21,16 +25,17 @@ const MAIN_SERIES: Record<string, string> = {
   adjusted: 'Bias-adjusted forecast',
 }
 
+/** Gap-shading points plus, on whole hours, the adjusted forecast and other publishes. */
 function buildChartRows(day: DayResponse): ChartRow[] {
-  const rows: ChartRow[] = day.rows.map((r) => ({
-    hour: r.hour,
-    actual: r.actual_mw,
-    forecast: r.forecast_mw,
-    adjusted: r.corrected_forecast_mw,
-  }))
+  const gap = buildGapSeries(day.rows.map((r) => ({ hour: r.hour, forecast: r.forecast_mw, actual: r.actual_mw })))
+  const rows: ChartRow[] = gap.map((g) => ({ ...g }))
+  for (const r of day.rows) {
+    const row = rows.find((x) => x.hour === r.hour && !x.crossing)
+    if (row) row.adjusted = r.corrected_forecast_mw
+  }
   day.other_publishes.forEach((p, i) => {
     for (const pt of p.rows) {
-      const row = rows.find((r) => r.hour === pt.hour)
+      const row = rows.find((x) => x.hour === pt.hour && !x.crossing)
       if (row) row[`p${i}`] = pt.forecast_mw
     }
   })
@@ -38,7 +43,8 @@ function buildChartRows(day: DayResponse): ChartRow[] {
 }
 
 function MainTooltip({ active, payload, label }: TooltipProps<number, string>) {
-  if (!active || !payload?.length) return null
+  // Crossing points sit between whole hours; only whole hours get a tooltip.
+  if (!active || !payload?.length || !Number.isInteger(Number(label))) return null
   const shown = payload.filter((p) => typeof p.dataKey === 'string' && p.dataKey in MAIN_SERIES)
   return (
     <div className="tooltip">
@@ -63,7 +69,7 @@ function ErrorTooltip({ active, payload, label }: TooltipProps<number, string>) 
   )
 }
 
-function DayView({ day, adjusted }: { day: DayResponse; adjusted: boolean }) {
+function DayView({ day, adjusted, others }: { day: DayResponse; adjusted: boolean; others: boolean }) {
   const [leadFrom, leadTo] = leadRange(day.publish_time, day.date)
   const observed = day.rows.filter((r) => r.actual_mw !== null)
   const overRaw = observed.filter((r) => (r.error_mw ?? 0) > 0).length
@@ -93,36 +99,54 @@ function DayView({ day, adjusted }: { day: DayResponse; adjusted: boolean }) {
         <KpiCard label="Hours over-forecast" value={`${overRaw} / ${observed.length}`}
           note="Hours where the forecast was higher than actual wind"
           extra={adjustedLine(`${overAdj} / ${observed.length}`)} />
+        <KpiCard label="Wind shortfall" value={formatGWh(s.shortfall_mwh)}
+          note="Energy you planned to get from wind that didn’t arrive"
+          extra={adjustedLine(formatGWh(s.corrected_shortfall_mwh))} />
+        <KpiCard label="Extra wind" value={formatGWh(s.surplus_mwh)}
+          note="Wind that arrived beyond what was forecast"
+          extra={adjustedLine(formatGWh(s.corrected_surplus_mwh))} />
       </div>
 
       <ChartCard title={`Wind generation on ${formatLongDay(day.date)}`}
-        caption="Grey lines are the other forecasts published for this day.">
+        caption={others
+          ? 'Shading shows the gap between the forecast used and actual wind. Grey lines are the other forecasts published for this day.'
+          : 'Shading shows the gap between the forecast used and actual wind.'}>
         <div className="legend">
           <LegendItem color={COLORS.actual} label="Actual wind" />
           <LegendItem color={COLORS.forecast} label="Forecast used (latest before deadline)" thick />
           {adjusted && <LegendItem color={COLORS.adjusted} label="Bias-adjusted forecast (experimental)" />}
-          <LegendItem color={COLORS.otherPublish} label="Earlier forecasts" faint />
-          <LegendItem color={COLORS.otherPublish} label="Published after deadline – not available to the buyer" dashed faint />
+          <LegendItem color={COLORS.shortfallFill} label="Gap: wind planned but not delivered" swatch />
+          <LegendItem color={COLORS.surplusFill} label="Gap: extra wind" swatch />
+          {others && <LegendItem color={COLORS.otherPublish} label="Earlier forecasts" faint />}
+          {others && (
+            <LegendItem color={COLORS.otherPublish} label="Published after deadline – not available to the buyer" dashed faint />
+          )}
         </div>
         <ResponsiveContainer width="100%" height={320}>
-          <LineChart data={chartRows} margin={{ top: 8, right: 12, bottom: 0, left: 8 }}>
+          <ComposedChart data={chartRows} margin={{ top: 8, right: 12, bottom: 0, left: 8 }}>
             <CartesianGrid stroke={COLORS.grid} vertical={false} />
-            <XAxis dataKey="hour" tickFormatter={formatHour} interval={2} tick={{ fontSize: 12 }} />
+            <XAxis dataKey="hour" type="number" domain={[0, 23]} ticks={HOUR_TICKS} tickFormatter={formatHour}
+              tick={{ fontSize: 12 }} />
             <YAxis tickFormatter={formatK} width={40} tick={{ fontSize: 12 }}
               label={{ value: 'MW', angle: -90, position: 'insideLeft', fontSize: 12 }} />
             <Tooltip content={<MainTooltip />} />
-            {day.other_publishes.map((p, i) => (
+            <Area dataKey="shortfall" stroke="none" fill={COLORS.shortfallFill} fillOpacity={1}
+              activeDot={false} isAnimationActive={false} />
+            <Area dataKey="surplus" stroke="none" fill={COLORS.surplusFill} fillOpacity={1}
+              activeDot={false} isAnimationActive={false} />
+            {others && day.other_publishes.map((p, i) => (
               <Line key={p.publish_time} dataKey={`p${i}`} stroke={COLORS.otherPublish}
                 strokeOpacity={p.after_decision ? 0.55 : 0.4} strokeWidth={1}
                 strokeDasharray={p.after_decision ? '5 3' : undefined}
-                dot={false} activeDot={false} isAnimationActive={false} connectNulls={false} />
+                dot={false} activeDot={false} isAnimationActive={false} connectNulls />
             ))}
             <Line dataKey="actual" stroke={COLORS.actual} strokeWidth={2} dot={false} isAnimationActive={false} />
             <Line dataKey="forecast" stroke={COLORS.forecast} strokeWidth={3.5} dot={false} isAnimationActive={false} />
             {adjusted && (
-              <Line dataKey="adjusted" stroke={COLORS.adjusted} strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line dataKey="adjusted" stroke={COLORS.adjusted} strokeWidth={2} dot={false} isAnimationActive={false}
+                connectNulls />
             )}
-          </LineChart>
+          </ComposedChart>
         </ResponsiveContainer>
       </ChartCard>
 
@@ -148,7 +172,7 @@ function DayView({ day, adjusted }: { day: DayResponse; adjusted: boolean }) {
 }
 
 export function DecisionDay({ state, update }: { state: UrlState; update: (p: Partial<UrlState>) => void }) {
-  const { date, cutoff, adjusted } = state
+  const { date, cutoff, adjusted, others } = state
   const { state: day, retry } = useFetch((signal) => api.day(date, cutoff, signal), `${date}|${cutoff}`)
 
   return (
@@ -173,10 +197,14 @@ export function DecisionDay({ state, update }: { state: UrlState; update: (p: Pa
           <input type="checkbox" checked={adjusted} onChange={(e) => update({ adjusted: e.target.checked })} />
           <span>Show bias-adjusted forecast (experimental)</span>
         </label>
+        <label className="control toggle">
+          <input type="checkbox" checked={others} onChange={(e) => update({ others: e.target.checked })} />
+          <span>Show other forecasts for this day</span>
+        </label>
       </div>
 
       <Loadable state={day} retry={retry} isEmpty={(d) => d.rows.length === 0}>
-        {(d) => <DayView day={d} adjusted={adjusted} />}
+        {(d) => <DayView day={d} adjusted={adjusted} others={others} />}
       </Loadable>
     </>
   )

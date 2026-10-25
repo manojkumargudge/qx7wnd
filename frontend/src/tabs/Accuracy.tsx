@@ -2,11 +2,11 @@ import {
   Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip,
   XAxis, YAxis,
 } from 'recharts'
-import { api, type AccuracyResponse, type Summary, type TimeseriesResponse } from '../api'
+import { api, type AccuracyResponse, type EnergyGap, type Summary, type TimeseriesResponse } from '../api'
 import { COLORS } from '../colors'
 import { ChartCard, CutoffSelect, KpiCard, LegendItem, Loadable } from '../components/ui'
 import {
-  biasSentence, formatDay, formatHour, formatK, formatMW, formatSignedMW, p10Sentence, p90Sentence,
+  biasSentence, formatDay, formatGWh, formatHour, formatK, formatMW, formatSignedMW, p10Sentence, p90Sentence,
 } from '../format'
 import { binValues } from '../histogram'
 import { compareDays, comparisonPhrase } from '../stats'
@@ -18,8 +18,9 @@ const DAY_MS = 86_400_000
 
 const mwTooltip = (v: number, name: string) => [formatMW(v), name]
 
-function Kpis({ s }: { s: Summary }) {
+function Kpis({ s, energy, start, end }: { s: Summary; energy: EnergyGap; start: string; end: string }) {
   return (
+    <>
     <div className="kpis kpis-5">
       <KpiCard label="Average miss (MAE)" value={formatMW(s.mae)} note="Typical size of the hourly gap" />
       <KpiCard label="RMSE" value={formatMW(s.rmse)} note="Like MAE, but big misses count more" />
@@ -27,6 +28,13 @@ function Kpis({ s }: { s: Summary }) {
       <KpiCard label="P90 error" value={formatSignedMW(s.p90)} note={p90Sentence(s.p90)} />
       <KpiCard label="P10 error" value={formatSignedMW(s.p10)} note={p10Sentence(s.p10)} />
     </div>
+    <div className="kpis">
+      <KpiCard label={`Wind shortfall, ${formatDay(start)} – ${formatDay(end)}`} value={formatGWh(energy.shortfall_mwh)}
+        note="Total energy planned from wind that didn’t arrive (hours where the forecast was too high)" />
+      <KpiCard label={`Extra wind, ${formatDay(start)} – ${formatDay(end)}`} value={formatGWh(energy.surplus_mwh)}
+        note="Total wind that arrived beyond the forecast (hours where the forecast was too low)" />
+    </div>
+    </>
   )
 }
 
@@ -122,10 +130,10 @@ function tailNote(raw: Summary, adj: Summary, name: string): string {
 }
 
 function Corrected({ acc }: { acc: AccuracyResponse }) {
-  const rows: [string, Summary][] = [
-    ['Forecast as published', acc.summary],
-    ['Additive adjustment', acc.corrected.additive],
-    ['Ratio adjustment (default)', acc.corrected.ratio],
+  const rows: [string, Summary, EnergyGap][] = [
+    ['Forecast as published', acc.summary, acc.energy.raw],
+    ['Additive adjustment', acc.corrected.additive, acc.energy.additive],
+    ['Ratio adjustment (default)', acc.corrected.ratio, acc.energy.ratio],
   ]
   return (
     <section className="card">
@@ -133,10 +141,10 @@ function Corrected({ acc }: { acc: AccuracyResponse }) {
       <div className="table-wrap">
         <table>
           <thead>
-            <tr><th>Forecast</th><th>MAE</th><th>RMSE</th><th>Bias</th><th>P10</th><th>P90</th></tr>
+            <tr><th>Forecast</th><th>MAE</th><th>RMSE</th><th>Bias</th><th>P10</th><th>P90</th><th>Shortfall</th><th>Extra wind</th></tr>
           </thead>
           <tbody>
-            {rows.map(([name, s]) => (
+            {rows.map(([name, s, e]) => (
               <tr key={name}>
                 <th scope="row">{name}</th>
                 <td>{formatMW(s.mae)}</td>
@@ -144,6 +152,8 @@ function Corrected({ acc }: { acc: AccuracyResponse }) {
                 <td>{formatSignedMW(s.bias)}</td>
                 <td>{formatSignedMW(s.p10)}</td>
                 <td>{formatSignedMW(s.p90)}</td>
+                <td>{formatGWh(e.shortfall_mwh)}</td>
+                <td>{formatGWh(e.surplus_mwh)}</td>
               </tr>
             ))}
           </tbody>
@@ -185,7 +195,7 @@ export function Accuracy({ state, update }: { state: UrlState; update: (p: Parti
       </div>
 
       <Loadable state={acc.state} retry={acc.retry} isEmpty={(a) => a.summary.n === 0}>
-        {(a) => <Kpis s={a.summary} />}
+        {(a) => <Kpis s={a.summary} energy={a.energy.raw} start={a.start} end={a.end} />}
       </Loadable>
 
       <Loadable state={ts.state} retry={ts.retry} isEmpty={(t) => t.points.length === 0}>

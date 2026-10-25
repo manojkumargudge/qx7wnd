@@ -70,6 +70,16 @@ export interface DaySummary {
   bias: number | null
   corrected_mae: number | null
   corrected_bias: number | null
+  /** MWh, both positive: wind planned but not delivered, and extra wind. */
+  shortfall_mwh: number
+  surplus_mwh: number
+  corrected_shortfall_mwh: number
+  corrected_surplus_mwh: number
+}
+
+export interface EnergyGap {
+  shortfall_mwh: number
+  surplus_mwh: number
 }
 
 export interface DayResponse {
@@ -111,6 +121,7 @@ export interface AccuracyResponse {
   end: string
   summary: Summary
   corrected: Record<CorrectionMethod, Summary>
+  energy: Record<'raw' | CorrectionMethod, EnergyGap>
   by_hour_of_day: HourStat[]
   by_lead_bucket: LeadStat[]
   daily: DailyStat[]

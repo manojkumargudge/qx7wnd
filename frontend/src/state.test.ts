@@ -3,13 +3,13 @@ import { parseUrlState, shiftDate, toSearch, urlNotices } from './state'
 
 describe('URL state', () => {
   it('round-trips tab, date, cutoff and the adjusted toggle', () => {
-    const s = { tab: 'accuracy' as const, date: '2026-01-20', cutoff: '09:30', adjusted: true }
+    const s = { tab: 'accuracy' as const, date: '2026-01-20', cutoff: '09:30', adjusted: true, others: true }
     expect(parseUrlState(toSearch(s))).toEqual(s)
   })
 
   it('falls back to defaults for invalid or out-of-range values', () => {
     expect(parseUrlState('?tab=nope&date=2026-03-01&cutoff=09:15')).toEqual({
-      tab: 'day', date: '2026-01-15', cutoff: '09:00', adjusted: false,
+      tab: 'day', date: '2026-01-15', cutoff: '09:00', adjusted: false, others: false,
     })
   })
 

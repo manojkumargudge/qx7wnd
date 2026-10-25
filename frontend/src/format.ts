@@ -15,6 +15,13 @@ export function formatMW(v: number | null | undefined): string {
   return `${r < 0 ? MINUS : ''}${intFormat.format(Math.abs(r))} MW`
 }
 
+/** 25004 MWh -> "25.0 GWh" */
+export function formatGWh(mwh: number | null | undefined): string {
+  if (mwh === null || mwh === undefined || Number.isNaN(mwh)) return '–'
+  const gwh = Math.round(mwh / 100) / 10 + 0 // + 0 turns -0 into 0
+  return `${new Intl.NumberFormat('en-GB', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(gwh)} GWh`
+}
+
 /** Axis ticks in thousands of MW: 18000 -> "18k", 4500 -> "4.5k", -2000 -> "−2k" */
 export function formatK(v: number): string {
   const k = Math.round(v / 100) / 10

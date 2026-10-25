@@ -64,7 +64,9 @@ def test_day_default_cutoff_uses_0730_publish(client):
     assert set(first) == {"hour", "start_time", "forecast_mw", "corrected_forecast_mw",
                           "actual_mw", "error_mw"}
     assert first["error_mw"] == pytest.approx(first["forecast_mw"] - first["actual_mw"])
-    assert set(body["summary"]) == {"mae", "bias", "corrected_mae", "corrected_bias"}
+    assert set(body["summary"]) == {"mae", "bias", "corrected_mae", "corrected_bias",
+                                    "shortfall_mwh", "surplus_mwh",
+                                    "corrected_shortfall_mwh", "corrected_surplus_mwh"}
 
 
 def test_day_cutoff_0950_uses_0930_publish(client):
@@ -256,3 +258,30 @@ def test_accuracy_daily_corrected_mae_changes_with_cutoff(client):
     at_9 = client.get("/api/accuracy", params={"cutoff": "09:00"}).json()["daily"]
     at_11 = client.get("/api/accuracy", params={"cutoff": "11:00"}).json()["daily"]
     assert [d["ratio_mae"] for d in at_9] != [d["ratio_mae"] for d in at_11]
+
+
+def test_day_summary_energy_gaps(client):
+    body = client.get("/api/day", params={"date": "2026-01-15", "method": "ratio"}).json()
+    s, rows = body["summary"], body["rows"]
+    raw = [r["forecast_mw"] - r["actual_mw"] for r in rows]
+    corr = [r["corrected_forecast_mw"] - r["actual_mw"] for r in rows]
+    assert s["shortfall_mwh"] == pytest.approx(sum(e for e in raw if e > 0), abs=0.1)
+    assert s["surplus_mwh"] == pytest.approx(-sum(e for e in raw if e < 0), abs=0.1)
+    assert s["corrected_shortfall_mwh"] == pytest.approx(sum(e for e in corr if e > 0), abs=1.0)
+    assert s["corrected_surplus_mwh"] == pytest.approx(-sum(e for e in corr if e < 0), abs=1.0)
+    # Every hour was over-forecast on this day, so there is no extra wind.
+    assert s["surplus_mwh"] == 0
+    # Shortfall minus surplus is the net error: bias x 24 h.
+    assert s["shortfall_mwh"] - s["surplus_mwh"] == pytest.approx(s["bias"] * 24, abs=2.5)
+
+
+def test_accuracy_energy_gaps(client):
+    body = client.get("/api/accuracy", params={"start": "2026-01-10", "end": "2026-01-20"}).json()
+    lo, hi = date(2026, 1, 10), date(2026, 1, 20)
+    raw = in_range(decision_errors("09:00"), lo, hi)
+    assert body["energy"]["raw"] == rounded(metrics.energy_gaps(raw))
+    for m in ("additive", "ratio"):
+        assert body["energy"][m] == rounded(metrics.energy_gaps(in_range(corrected_errors("09:00", m), lo, hi)))
+    e = body["energy"]["raw"]
+    n = body["summary"]["n"]
+    assert e["shortfall_mwh"] - e["surplus_mwh"] == pytest.approx(body["summary"]["bias"] * n, rel=1e-3)

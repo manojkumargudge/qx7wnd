@@ -3,7 +3,7 @@ import math
 import pandas as pd
 import pytest
 
-from app.metrics import by_hour_of_day, by_lead_bucket, join_actuals, summary
+from app.metrics import by_hour_of_day, by_lead_bucket, energy_gaps, join_actuals, summary
 
 # Errors (forecast - actual) are +10, -10, 0, +20.
 STARTS = pd.to_datetime(["2026-01-16 00:00", "2026-01-16 01:00",
@@ -66,3 +66,17 @@ def test_by_hour_of_day(joined):
     assert out.loc[0, "bias"] == pytest.approx(5.0)
     assert out.loc[1, "mae"] == pytest.approx(15.0)   # errors -10, +20
     assert out.loc[1, "bias"] == pytest.approx(5.0)
+
+
+def test_energy_gaps_split_positive_and_negative_errors(joined):
+    # Errors +10, -10, 0, +20 over four hours.
+    assert energy_gaps(joined) == {"shortfall_mwh": 30.0, "surplus_mwh": 10.0}
+
+
+def test_energy_gaps_empty():
+    assert energy_gaps(pd.DataFrame({"error": []})) == {"shortfall_mwh": 0.0, "surplus_mwh": 0.0}
+
+
+def test_energy_gaps_no_negative_zero():
+    out = energy_gaps(pd.DataFrame({"error": [5.0, 3.0]}))
+    assert math.copysign(1, out["surplus_mwh"]) == 1
