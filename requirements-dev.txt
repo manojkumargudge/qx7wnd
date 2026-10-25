@@ -1,0 +1,6 @@
+# Local development: tests, data fetching, and running the API with uvicorn.
+-r requirements.txt
+httpx==0.28.1
+pytest==8.3.3
+requests==2.32.3
+uvicorn==0.34.0

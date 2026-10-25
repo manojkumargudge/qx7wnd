@@ -1,2 +1,4 @@
-requests
-pandas
+# Runtime dependencies for the API (installed by Vercel for api/index.py).
+fastapi==0.115.6
+numpy==2.0.2
+pandas==2.2.2

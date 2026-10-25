@@ -73,16 +73,9 @@ def corrected_errors(cutoff: str, method: str) -> pd.DataFrame:
     return joined
 
 
-@lru_cache(maxsize=1)
-def default_method() -> str:
-    """The correction method with the lower full-range MAE at the default cutoff."""
-    return min(METHODS, key=lambda m: metrics.summary(corrected_errors(config.CUTOFF, m))["mae"])
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     get_dataset()
-    default_method()
     yield
 
 
@@ -268,7 +261,8 @@ def meta():
     times = get_dataset().forecasts["publish_time"].dt.strftime("%H:%M").unique()
     return Meta(delivery_start=DELIVERY_START, delivery_end=DELIVERY_END,
                 default_cutoff=config.CUTOFF, publish_times_of_day=sorted(times),
-                correction_methods=list(METHODS), default_correction_method=default_method(),
+                correction_methods=list(METHODS),
+                default_correction_method=config.DEFAULT_CORRECTION_METHOD,
                 correction_note=CORRECTION_NOTE, data_source=DATA_SOURCE,
                 timezone=TIMEZONE_NOTE)
 
@@ -276,7 +270,7 @@ def meta():
 @app.get("/api/day", response_model=DayResponse)
 def day(date: date, cutoff: CutoffParam = config.CUTOFF, method: Optional[Method] = None):
     check_in_range("date", date)
-    method = method or default_method()
+    method = method or config.DEFAULT_CORRECTION_METHOD
     ds = get_dataset()
     chosen = decision_forecast(ds.forecasts, date, cutoff)
     corrected = corrected_forecasts_for_range(ds.forecasts, ds.actuals, date, date, cutoff, method)

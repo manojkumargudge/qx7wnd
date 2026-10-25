@@ -6,9 +6,8 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main, metrics
-from app.main import Dataset, app, corrected_errors, decision_errors, default_method, \
-    get_dataset, in_range
+from app import config, main, metrics
+from app.main import Dataset, app, corrected_errors, decision_errors, get_dataset, in_range
 
 
 @pytest.fixture(scope="module")
@@ -98,14 +97,21 @@ def test_accuracy_sub_range(client):
 def test_meta_correction_fields(client):
     body = client.get("/api/meta").json()
     assert body["correction_methods"] == ["additive", "ratio"]
-    assert body["default_correction_method"] == default_method()
+    assert body["default_correction_method"] == "ratio"
     assert "D-8..D-2" in body["correction_note"]
+
+
+def test_hardcoded_default_still_has_lower_january_mae():
+    # Guards the claim in config.py/README: ratio beat additive on the full range.
+    mae = {m: metrics.summary(corrected_errors("09:00", m))["mae"] for m in ("additive", "ratio")}
+    assert config.DEFAULT_CORRECTION_METHOD == "ratio"
+    assert mae["ratio"] < mae["additive"]
 
 
 def test_day_correction_default_method(client):
     body = client.get("/api/day", params={"date": "2026-01-15"}).json()
     corr = body["correction"]
-    assert corr["method"] == default_method()
+    assert corr["method"] == "ratio"
     assert (corr["window_start"], corr["window_end"]) == ("2026-01-07", "2026-01-13")
     assert all("corrected_forecast_mw" in row for row in body["rows"])
 
