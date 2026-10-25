@@ -11,7 +11,12 @@ from app import config
 
 
 def hourly_actuals(fuelhh: pd.DataFrame) -> pd.DataFrame:
-    """Average the two half-hours of each hour; hours missing a half are dropped."""
+    """Average the two half-hours of each hour; hours missing a half are dropped.
+
+    If a half-hour appears more than once, the row with the latest publishTime wins.
+    """
+    if "publishTime" in fuelhh.columns:
+        fuelhh = fuelhh.sort_values("publishTime").drop_duplicates("startTime", keep="last")
     df = pd.DataFrame({
         "start_time": pd.to_datetime(fuelhh["startTime"], utc=True).dt.floor("h"),
         "generation": fuelhh["generation"].astype(float),

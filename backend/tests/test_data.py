@@ -38,6 +38,16 @@ def test_half_hours_are_averaged_to_hourly():
     assert list(out.columns) == ["start_time", "actual_mw"]
 
 
+def test_duplicate_half_hours_keep_latest_publish():
+    raw = pd.DataFrame({
+        "publishTime": ["2026-01-15T00:30:00Z", "2026-01-15T01:00:00Z",
+                        "2026-01-15T02:00:00Z"],
+        "startTime": ["2026-01-15T00:00:00Z", "2026-01-15T00:30:00Z", "2026-01-15T00:00:00Z"],
+        "generation": [100, 200, 300],
+    })
+    assert hourly_actuals(raw)["actual_mw"].tolist() == [250.0]
+
+
 def test_hour_with_one_half_missing_is_dropped():
     raw = pd.DataFrame({
         "startTime": ["2026-01-15T00:00:00Z", "2026-01-15T00:30:00Z", "2026-01-15T01:30:00Z"],

@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from functools import lru_cache
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -18,6 +18,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app import config, metrics
+from app.correction import METHODS, InsufficientHistoryError, corrected_forecasts_for_range, \
+    training_window
 from app.data import load_actuals, load_forecasts
 from app.forecast import NoDecisionForecastError, cutoff_timestamp, decision_forecast, \
     decision_forecasts_for_range
@@ -31,8 +33,12 @@ DATA_SOURCE = ("Elexon BMRS Insights API: FUELHH (fuelType=WIND) half-hourly out
 TIMEZONE_NOTE = ("All times are UTC. A delivery day is 00:00-23:00 UTC; its forecast is the "
                  "latest WINDFOR publish at or before the cutoff time on the previous day.")
 
+CORRECTION_NOTE = ("Corrections are trained on delivery days D-8..D-2 only (decision-time "
+                   "forecasts vs actuals), so they use nothing unknown at the D-1 cutoff.")
+
 CutoffParam = Annotated[str, Query(pattern=r"^([01]\d|2[0-3]):[0-5]\d$",
                                    description="Decision cutoff on D-1, HH:MM UTC")]
+Method = Literal["additive", "ratio"]
 
 
 # ---------------------------------------------------------------- data
@@ -56,9 +62,27 @@ def decision_errors(cutoff: str) -> pd.DataFrame:
     return metrics.join_actuals(fc, ds.actuals)
 
 
+@lru_cache(maxsize=32)
+def corrected_errors(cutoff: str, method: str) -> pd.DataFrame:
+    """Corrected decision-time forecasts for the full range; error uses corrected_mw."""
+    ds = get_dataset()
+    fc = corrected_forecasts_for_range(ds.forecasts, ds.actuals, DELIVERY_START, DELIVERY_END,
+                                       cutoff, method)
+    joined = metrics.join_actuals(fc, ds.actuals)
+    joined["error"] = joined["corrected_mw"] - joined["actual_mw"]
+    return joined
+
+
+@lru_cache(maxsize=1)
+def default_method() -> str:
+    """The correction method with the lower full-range MAE at the default cutoff."""
+    return min(METHODS, key=lambda m: metrics.summary(corrected_errors(config.CUTOFF, m))["mae"])
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     get_dataset()
+    default_method()
     yield
 
 
@@ -73,6 +97,9 @@ class Meta(BaseModel):
     delivery_end: date
     default_cutoff: str
     publish_times_of_day: list[str]
+    correction_methods: list[str]
+    default_correction_method: str
+    correction_note: str
     data_source: str
     timezone: str
 
@@ -91,8 +118,17 @@ class DayRow(BaseModel):
     hour: int
     start_time: datetime
     forecast_mw: float
+    corrected_forecast_mw: float
     actual_mw: Optional[float]
     error_mw: Optional[float]
+
+
+class CorrectionUsed(BaseModel):
+    method: str
+    value: float
+    unit: str
+    window_start: date
+    window_end: date
 
 
 class PublishPoint(BaseModel):
@@ -119,6 +155,7 @@ class DayResponse(BaseModel):
     publish_time: datetime
     rows: list[DayRow]
     summary: DaySummary
+    correction: CorrectionUsed
     other_publishes: list[OtherPublish]
 
 
@@ -142,11 +179,17 @@ class DailyStat(BaseModel):
     bias: float
 
 
+class CorrectedSummaries(BaseModel):
+    additive: Summary
+    ratio: Summary
+
+
 class AccuracyResponse(BaseModel):
     cutoff: str
     start: date
     end: date
     summary: Summary
+    corrected: CorrectedSummaries
     by_hour_of_day: list[HourStat]
     by_lead_bucket: list[LeadStat]
     daily: list[DailyStat]
@@ -186,7 +229,8 @@ async def validation_error(_request: Request, exc: RequestValidationError):
 
 
 @app.exception_handler(NoDecisionForecastError)
-async def no_decision_forecast(_request: Request, exc: NoDecisionForecastError):
+@app.exception_handler(InsufficientHistoryError)
+async def data_gap(_request: Request, exc: ValueError):
     return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 
@@ -224,22 +268,27 @@ def meta():
     times = get_dataset().forecasts["publish_time"].dt.strftime("%H:%M").unique()
     return Meta(delivery_start=DELIVERY_START, delivery_end=DELIVERY_END,
                 default_cutoff=config.CUTOFF, publish_times_of_day=sorted(times),
-                data_source=DATA_SOURCE, timezone=TIMEZONE_NOTE)
+                correction_methods=list(METHODS), default_correction_method=default_method(),
+                correction_note=CORRECTION_NOTE, data_source=DATA_SOURCE,
+                timezone=TIMEZONE_NOTE)
 
 
 @app.get("/api/day", response_model=DayResponse)
-def day(date: date, cutoff: CutoffParam = config.CUTOFF):
+def day(date: date, cutoff: CutoffParam = config.CUTOFF, method: Optional[Method] = None):
     check_in_range("date", date)
+    method = method or default_method()
     ds = get_dataset()
     chosen = decision_forecast(ds.forecasts, date, cutoff)
-    joined = chosen.merge(ds.actuals, on="start_time", how="left")
+    corrected = corrected_forecasts_for_range(ds.forecasts, ds.actuals, date, date, cutoff, method)
+    joined = corrected.merge(ds.actuals, on="start_time", how="left")
     joined["error"] = joined["forecast_mw"] - joined["actual_mw"]
     publish = chosen["publish_time"].iloc[0]
     decided_at = cutoff_timestamp(date, cutoff)
+    window_start, window_end = training_window(date)
 
     rows = [DayRow(hour=r.start_time.hour, start_time=r.start_time.to_pydatetime(),
-                   forecast_mw=r.forecast_mw, actual_mw=optional_float(r.actual_mw),
-                   error_mw=optional_float(r.error))
+                   forecast_mw=r.forecast_mw, corrected_forecast_mw=r.corrected_mw,
+                   actual_mw=optional_float(r.actual_mw), error_mw=optional_float(r.error))
             for r in joined.itertuples()]
 
     others = in_range(ds.forecasts, date, date)
@@ -258,6 +307,9 @@ def day(date: date, cutoff: CutoffParam = config.CUTOFF):
         publish_time=publish.to_pydatetime(), rows=rows,
         summary=DaySummary(mae=optional_float(errors.abs().mean()),
                            bias=optional_float(errors.mean())),
+        correction=CorrectionUsed(method=method, value=float(corrected["correction"].iloc[0]),
+                                  unit="MW subtracted" if method == "additive" else "multiplier",
+                                  window_start=window_start, window_end=window_end),
         other_publishes=other_publishes)
 
 
@@ -278,6 +330,9 @@ def accuracy(cutoff: CutoffParam = config.CUTOFF, start: Optional[date] = None,
     return AccuracyResponse(
         cutoff=cutoff, start=start, end=end,
         summary=Summary(**metrics.summary(dec)),
+        corrected=CorrectedSummaries(**{
+            m: Summary(**metrics.summary(in_range(corrected_errors(cutoff, m), start, end)))
+            for m in METHODS}),
         by_hour_of_day=metrics.by_hour_of_day(dec).to_dict("records"),
         by_lead_bucket=metrics.by_lead_bucket(all_pubs).astype({"lead_bucket": str})
         .to_dict("records"),

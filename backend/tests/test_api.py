@@ -7,7 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main, metrics
-from app.main import Dataset, app, decision_errors, get_dataset, in_range
+from app.main import Dataset, app, corrected_errors, decision_errors, default_method, \
+    get_dataset, in_range
 
 
 @pytest.fixture(scope="module")
@@ -42,7 +43,8 @@ def test_day_default_cutoff_uses_0730_publish(client):
     assert len(body["rows"]) == 24
     assert [row["hour"] for row in body["rows"]] == list(range(24))
     first = body["rows"][0]
-    assert set(first) == {"hour", "start_time", "forecast_mw", "actual_mw", "error_mw"}
+    assert set(first) == {"hour", "start_time", "forecast_mw", "corrected_forecast_mw",
+                          "actual_mw", "error_mw"}
     assert first["error_mw"] == pytest.approx(first["forecast_mw"] - first["actual_mw"])
     assert set(body["summary"]) == {"mae", "bias"}
 
@@ -93,6 +95,48 @@ def test_accuracy_sub_range(client):
     assert len(body["daily"]) == 3
 
 
+def test_meta_correction_fields(client):
+    body = client.get("/api/meta").json()
+    assert body["correction_methods"] == ["additive", "ratio"]
+    assert body["default_correction_method"] == default_method()
+    assert "D-8..D-2" in body["correction_note"]
+
+
+def test_day_correction_default_method(client):
+    body = client.get("/api/day", params={"date": "2026-01-15"}).json()
+    corr = body["correction"]
+    assert corr["method"] == default_method()
+    assert (corr["window_start"], corr["window_end"]) == ("2026-01-07", "2026-01-13")
+    assert all("corrected_forecast_mw" in row for row in body["rows"])
+
+
+@pytest.mark.parametrize("method", ["additive", "ratio"])
+def test_day_correction_is_applied_per_row(client, method):
+    body = client.get("/api/day", params={"date": "2026-01-15", "method": method}).json()
+    value = body["correction"]["value"]
+    assert body["correction"]["method"] == method
+    for row in body["rows"]:
+        expected = row["forecast_mw"] - value if method == "additive" else row["forecast_mw"] * value
+        assert row["corrected_forecast_mw"] == pytest.approx(expected)
+
+
+def test_day_correction_matches_range_computation(client):
+    body = client.get("/api/day", params={"date": "2026-01-20", "method": "ratio"}).json()
+    ranged = corrected_errors("09:00", "ratio")
+    ranged = ranged[ranged["delivery_date"] == date(2026, 1, 20)]
+    assert [r["corrected_forecast_mw"] for r in body["rows"]] == \
+        pytest.approx(ranged["corrected_mw"].tolist())
+
+
+def test_accuracy_corrected_summaries(client):
+    body = client.get("/api/accuracy", params={"start": "2026-01-10", "end": "2026-01-20"}).json()
+    for m in ("additive", "ratio"):
+        expected = metrics.summary(in_range(corrected_errors("09:00", m),
+                                            date(2026, 1, 10), date(2026, 1, 20)))
+        assert body["corrected"][m] == pytest.approx(expected)
+        assert body["corrected"][m]["n"] == body["summary"]["n"] == 11 * 24
+
+
 def test_timeseries(client):
     r = client.get("/api/timeseries", params={"start": "2026-01-02", "end": "2026-01-03"})
     assert r.status_code == 200
@@ -110,6 +154,7 @@ def test_timeseries(client):
     ("/api/day", {"date": "2026-02-02"}, "outside the available delivery range"),
     ("/api/day", {"date": "2026-01-15", "cutoff": "9:00"}, "HH:MM"),
     ("/api/day", {"date": "2026-01-15", "cutoff": "25:00"}, "HH:MM"),
+    ("/api/day", {"date": "2026-01-15", "method": "median"}, "method"),
     ("/api/accuracy", {"cutoff": "noon"}, "HH:MM"),
     ("/api/accuracy", {"start": "2025-12-01"}, "outside the available delivery range"),
     ("/api/accuracy", {"start": "2026-01-20", "end": "2026-01-10"}, "must be on or before"),
