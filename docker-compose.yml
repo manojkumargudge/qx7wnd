@@ -1,0 +1,22 @@
+# Local stack mirroring the Vercel split: nginx serves the frontend and
+# proxies /api/ to the FastAPI container. Open http://localhost:8080
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      WIND_CUTOFF: "09:00"
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
