@@ -9,6 +9,33 @@ later at a worse price. The app answers two questions:
 1. How accurate was the forecast the buyer could actually see at decision time (09:00 UTC on D-1)?
 2. Can a simple bias correction, trained only on data known at that time, make it better?
 
+## Architecture
+
+```
+Elexon BMRS API (FUELHH, WINDFOR)
+        |  backend/scripts/fetch_raw.py (chunked requests, retries with backoff)
+        v
+data/raw/*.json  (gitignored)
+        |  backend/scripts/build_dataset.py (half-hours averaged to hourly, forecast rows with lead <= 0 dropped)
+        v
+data/processed/*.csv  (committed snapshot)
+        |  loaded once at startup and cached
+        v
+FastAPI  /api/health  /api/meta  /api/day  /api/accuracy  /api/timeseries
+        |  forecast.py   picks the decision-time forecast
+        |  correction.py bias adjustment trained on D-8..D-2 only
+        |  metrics.py    MAE, RMSE, bias, P10/P90, energy gaps
+        v
+React + TypeScript + Recharts  (Decision day, Forecast accuracy, Method & assumptions)
+
+Deployed: Vercel (static frontend + Python function serving /api)
+Local:    docker compose (nginx web container + uvicorn API container)
+```
+
+- Data is fetched and processed offline, so the live app never depends on Elexon being up.
+- All analysis rules live in the backend; the frontend only displays what the API returns.
+- The same FastAPI app runs on Vercel and in Docker with no code changes.
+
 ## Results (09:00 cutoff, January 2026)
 
 31 delivery days, 2 Jan to 1 Feb 2026, 744 hours.
@@ -39,9 +66,9 @@ to 1 Feb (decided 31 Jan).
   regular times a day (02:30, 04:30, 07:30, 09:30, 11:30, 15:30, 18:30, 22:30 UTC), plus one
   irregular publish at 12:25 on 15 Jan. Forecast rows for hours at or before the publish time
   (lead ≤ 0) are dropped.
-- **Decision-time forecast:** for delivery day D (00:00–23:00 UTC), the latest publish at or before
-  the cutoff (default 09:00 UTC) on D-1. With the regular schedule that is the 07:30 publish. If that
-  publish does not cover all 24 hours, the app reports an error instead of falling back to an older
+- **Decision-time forecast:** for delivery day D (the 24 hours from 00:00 to 24:00 UTC), the latest
+  publish at or before the cutoff (default 09:00 UTC) on D-1. With the regular schedule that is the
+  07:30 publish. If that publish does not cover all 24 hours, the app reports an error instead of falling back to an older
   publish.
 - **Why 09:00:** an assumed decision time, configurable in the app and via `WIND_CUTOFF`. The
   result is not sensitive to it: MAE is 2,016 MW at 07:00 (04:30 publish), 2,039 MW at 09:00

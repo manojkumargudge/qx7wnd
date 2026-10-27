@@ -30,8 +30,8 @@ MAX_ACCURACY_LEAD_HOURS = 48
 CORS_ORIGINS = ["http://localhost:5173"]
 DATA_SOURCE = ("Elexon BMRS Insights API: FUELHH (fuelType=WIND) half-hourly outturn, "
                "averaged to hourly; WINDFOR hourly national wind forecasts.")
-TIMEZONE_NOTE = ("All times are UTC. A delivery day is 00:00-23:00 UTC; its forecast is the "
-                 "latest WINDFOR publish at or before the cutoff time on the previous day.")
+TIMEZONE_NOTE = ("All times are UTC. A delivery day is the 24 hours from 00:00 to 24:00 UTC; "
+                 "its forecast is the latest WINDFOR publish at or before the cutoff time on the previous day.")
 
 CORRECTION_NOTE = ("Corrections are trained on delivery days D-8..D-2 only (decision-time "
                    "forecasts vs actuals), so they use nothing unknown at the D-1 cutoff.")
