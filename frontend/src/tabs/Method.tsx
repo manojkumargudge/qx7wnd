@@ -20,7 +20,7 @@ export function Method() {
           previous day. Forecasts published after the deadline are shown for context only.
         </li>
         <li>
-          <strong>Delivery day.</strong> 00:00 to 23:00 UTC. In January UTC is the same as UK time.
+          <strong>Delivery day.</strong> The 24 hours from 00:00 to 24:00 UTC. In January UTC is the same as UK time.
         </li>
         <li>
           <strong>Hourly alignment.</strong> Actuals are reported every half hour and forecasts every hour,
@@ -46,7 +46,7 @@ export function Method() {
           is probably a little optimistic.
         </li>
         <li>
-          <strong>The gap.</strong> Over January the forecast ran about 14% above actual generation.
+          <strong>The gap.</strong> Over the period, total forecast wind was about 15% above total actual wind.
           That fits wind farms being turned down (curtailment) when the grid can’t take their power, but
           these datasets can’t show it. Curtailment data is outside the scope of this tool.
         </li>

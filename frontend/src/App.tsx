@@ -5,7 +5,7 @@ import { useUrlState, type Tab } from './state'
 
 const TAB_LABELS: Record<Tab, string> = {
   day: 'Decision day',
-  accuracy: 'Forecast accuracy (January)',
+  accuracy: 'Forecast accuracy (January decisions)',
   method: 'Method & assumptions',
 }
 

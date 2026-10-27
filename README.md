@@ -12,6 +12,8 @@ later at a worse price. The app answers two questions:
 ## Results (09:00 cutoff, January 2026)
 
 31 delivery days, 2 Jan to 1 Feb 2026, 744 hours.
+Purchase decisions are made in January on D-1, so delivery days run from 2 Jan (decided 1 Jan)
+to 1 Feb (decided 31 Jan).
 
 | Metric | Value |
 |---|---|
@@ -41,6 +43,11 @@ later at a worse price. The app answers two questions:
   the cutoff (default 09:00 UTC) on D-1. With the regular schedule that is the 07:30 publish. If that
   publish does not cover all 24 hours, the app reports an error instead of falling back to an older
   publish.
+- **Why 09:00:** an assumed decision time, configurable in the app and via `WIND_CUTOFF`. The
+  result is not sensitive to it: MAE is 2,016 MW at 07:00 (04:30 publish), 2,039 MW at 09:00
+  (07:30 publish) and 2,013 MW at 09:50 (09:30 publish). Cutoffs between 22:30 and 02:30 are not
+  supported, because the 22:30 publish only reaches about 46 hours ahead and does not cover the
+  whole next delivery day.
 - **Time zone:** everything is UTC. UK local time equals UTC in January, so there is no daylight
   saving issue in this data.
 - **Error sign:** error = forecast − actual, in MW. Positive means over-forecast (a shortfall for the
